@@ -40,6 +40,7 @@ public class PinotSessionProperties
     private static final String USE_DATE_TRUNC = "use_date_trunc";
     private static final String USE_PINOT_SQL_FOR_BROKER_QUERIES = "use_pinot_sql_for_broker_queries";
     private static final String NON_AGGREGATE_LIMIT_FOR_BROKER_QUERIES = "non_aggregate_limit_for_broker_queries";
+    private static final String LIMIT_THRESHOLD_FOR_TOP_BROKER_QUERIES = "limit_threshold_for_top_broker_queries";
 
     @VisibleForTesting
     public static final String FORBID_SEGMENT_QUERIES = "forbid_segment_queries";
@@ -100,6 +101,11 @@ public class PinotSessionProperties
         return session.getProperty(NON_AGGREGATE_LIMIT_FOR_BROKER_QUERIES, Integer.class);
     }
 
+    public static int getLimitThresholdForTopBrokerQueries(ConnectorSession session)
+    {
+        return session.getProperty(LIMIT_THRESHOLD_FOR_TOP_BROKER_QUERIES, Integer.class);
+    }
+
     @Inject
     public PinotSessionProperties(PinotConfig pinotConfig)
     {
@@ -143,6 +149,10 @@ public class PinotSessionProperties
                         USE_PINOT_SQL_FOR_BROKER_QUERIES,
                         "Use Pinot SQL syntax and endpoint for broker query",
                         pinotConfig.isUsePinotSqlForBrokerQueries(),
+                        false),
+                integerProperty(LIMIT_THRESHOLD_FOR_TOP_BROKER_QUERIES,
+                        "Max limit value to push down order by to pinot broker for top queries",
+                        pinotConfig.getLimitThresholdForTopNBrokerQueries(),
                         false),
                 new PropertyMetadata<>(
                         CONNECTION_TIMEOUT,

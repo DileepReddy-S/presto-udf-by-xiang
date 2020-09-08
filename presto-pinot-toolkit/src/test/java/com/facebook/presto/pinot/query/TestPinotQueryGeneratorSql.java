@@ -27,9 +27,16 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import org.testng.annotations.Test;
 
+import java.util.NoSuchElementException;
+
 public class TestPinotQueryGeneratorSql
         extends TestPinotQueryGenerator
 {
+    public TestPinotQueryGeneratorSql()
+    {
+        pinotConfig.setUsePinotSqlForBrokerQueries(useSqlSyntax());
+    }
+
     @Override
     public boolean useSqlSyntax()
     {
@@ -117,6 +124,9 @@ public class TestPinotQueryGeneratorSql
     @Test
     public void testAggregationWithOrderByPushDownInTopN()
     {
+        int limitToPushdownOrderByForBrokerQueries = 5000;
+        pinotConfig.setLimitThresholdForTopNBrokerQueries(limitToPushdownOrderByForBrokerQueries);
+        SessionHolder sessionHolder = new SessionHolder(pinotConfig);
         PlanBuilder planBuilder = createPlanBuilder(defaultSessionHolder);
         TableScanNode tableScanNode = tableScan(planBuilder, pinotTable, city, fare);
         AggregationNode agg = planBuilder.aggregation(
@@ -128,7 +138,7 @@ public class TestPinotQueryGeneratorSql
                 pinotConfig,
                 agg,
                 "SELECT city, sum(fare) FROM realtimeOnly GROUP BY city LIMIT 10000",
-                defaultSessionHolder,
+                sessionHolder,
                 ImmutableMap.of());
 
         TopNNode topN = new TopNNode(
@@ -141,7 +151,7 @@ public class TestPinotQueryGeneratorSql
                 pinotConfig,
                 topN,
                 "SELECT city, sum(fare) FROM realtimeOnly GROUP BY city ORDER BY city DESC LIMIT 50",
-                defaultSessionHolder,
+                sessionHolder,
                 ImmutableMap.of());
 
         topN = new TopNNode(
@@ -154,8 +164,51 @@ public class TestPinotQueryGeneratorSql
                 pinotConfig,
                 topN,
                 "SELECT city, sum(fare) FROM realtimeOnly GROUP BY city ORDER BY sum(fare) LIMIT 1000",
+                sessionHolder,
+                ImmutableMap.of());
+
+        topN = new TopNNode(
+                planBuilder.getIdAllocator().getNextId(),
+                agg,
+                1000L,
+                new OrderingScheme(ImmutableList.of(new Ordering(variable("sum_fare"), SortOrder.ASC_NULLS_FIRST))),
+                TopNNode.Step.SINGLE);
+        testPinotQuery(
+                pinotConfig,
+                topN,
+                "SELECT city, sum(fare) FROM realtimeOnly GROUP BY city ORDER BY sum(fare) LIMIT 1000",
+                sessionHolder,
+                ImmutableMap.of());
+    }
+
+    @Test(expectedExceptions = NoSuchElementException.class)
+    public void testLimitOrderByPushdown()
+    {
+        PlanBuilder planBuilder = createPlanBuilder(defaultSessionHolder);
+        TableScanNode tableScanNode = tableScan(planBuilder, pinotTable, city, fare);
+        AggregationNode agg = planBuilder.aggregation(
+                aggBuilder -> aggBuilder
+                        .source(tableScanNode)
+                        .singleGroupingSet(variable("city"))
+                        .addAggregation(planBuilder.variable("sum_fare"), getRowExpression("sum(fare)", defaultSessionHolder)));
+        int limitToPushdownOrderByForBrokerQueries = 5000;
+        pinotConfig.setLimitThresholdForTopNBrokerQueries(limitToPushdownOrderByForBrokerQueries);
+        TopNNode topN = new TopNNode(
+                planBuilder.getIdAllocator().getNextId(),
+                agg,
+                limitToPushdownOrderByForBrokerQueries,
+                new OrderingScheme(ImmutableList.of(new Ordering(variable("sum_fare"), SortOrder.ASC_NULLS_FIRST))),
+                TopNNode.Step.SINGLE);
+        testPinotQuery(
+                pinotConfig,
+                topN,
+                "SELECT city, sum(fare) FROM realtimeOnly GROUP BY city ORDER BY sum(fare) LIMIT " + limitToPushdownOrderByForBrokerQueries,
                 defaultSessionHolder,
                 ImmutableMap.of());
+        topN = new TopNNode(planBuilder.getIdAllocator().getNextId(), agg, limitToPushdownOrderByForBrokerQueries + 1,
+                new OrderingScheme(ImmutableList.of(new Ordering(variable("sum_fare"), SortOrder.ASC_NULLS_FIRST))),
+                TopNNode.Step.SINGLE);
+        new PinotQueryGenerator(pinotConfig, typeManager, functionMetadataManager, standardFunctionResolution).generate(topN, defaultSessionHolder.getConnectorSession()).get();
     }
 
     @Test
@@ -163,23 +216,26 @@ public class TestPinotQueryGeneratorSql
     {
         PlanBuilder planBuilder = createPlanBuilder(defaultSessionHolder);
         TableScanNode tableScanNode = tableScan(planBuilder, pinotTable, regionId, city, fare);
+        int limitToPushdownOrderByForBrokerQueries = 5000;
+        pinotConfig.setLimitThresholdForTopNBrokerQueries(limitToPushdownOrderByForBrokerQueries);
+        SessionHolder sessionHolder = new SessionHolder(pinotConfig);
         testPinotQuery(
                 pinotConfig,
                 topN(planBuilder, 50L, ImmutableList.of("fare"), ImmutableList.of(false), tableScanNode),
                 "SELECT regionId, city, fare FROM realtimeOnly ORDER BY fare DESC LIMIT 50",
-                defaultSessionHolder,
+                sessionHolder,
                 ImmutableMap.of());
         testPinotQuery(
                 pinotConfig,
                 topN(planBuilder, 50L, ImmutableList.of("fare", "city"), ImmutableList.of(true, false), tableScanNode),
                 "SELECT regionId, city, fare FROM realtimeOnly ORDER BY fare, city DESC LIMIT 50",
-                defaultSessionHolder,
+                sessionHolder,
                 ImmutableMap.of());
         testPinotQuery(
                 pinotConfig,
                 topN(planBuilder, 50L, ImmutableList.of("city", "fare"), ImmutableList.of(false, true), tableScanNode),
                 "SELECT regionId, city, fare FROM realtimeOnly ORDER BY city DESC, fare LIMIT 50",
-                defaultSessionHolder,
+                sessionHolder,
                 ImmutableMap.of());
 
         TopNNode topNNode = topN(planBuilder, 50L, ImmutableList.of("fare", "city"), ImmutableList.of(true, false), tableScanNode);
@@ -187,7 +243,7 @@ public class TestPinotQueryGeneratorSql
                 pinotConfig,
                 project(planBuilder, topNNode, ImmutableList.of("regionid", "city")),
                 "SELECT regionId, city FROM realtimeOnly ORDER BY fare, city DESC LIMIT 50",
-                defaultSessionHolder,
+                sessionHolder,
                 ImmutableMap.of());
 
         tableScanNode = tableScan(planBuilder, pinotTable, fare, city, regionId);
@@ -195,13 +251,13 @@ public class TestPinotQueryGeneratorSql
                 pinotConfig,
                 topN(planBuilder, 500L, ImmutableList.of("fare"), ImmutableList.of(false), tableScanNode),
                 "SELECT fare, city, regionId FROM realtimeOnly ORDER BY fare DESC LIMIT 500",
-                defaultSessionHolder,
+                sessionHolder,
                 ImmutableMap.of());
         testPinotQuery(
                 pinotConfig,
                 topN(planBuilder, 5000L, ImmutableList.of("fare", "city"), ImmutableList.of(true, false), tableScanNode),
                 "SELECT fare, city, regionId FROM realtimeOnly ORDER BY fare, city DESC LIMIT 5000",
-                defaultSessionHolder,
+                sessionHolder,
                 ImmutableMap.of());
     }
 
